@@ -1,6 +1,20 @@
+import math
+
+from django.conf import settings
 from django.db import models
+from django.utils import timezone
 from django.utils.text import slugify
 # Create your models here.
+
+def generate_unique_slug(instance, value):
+    """title/name থেকে unique slug বানায়। একই slug থাকলে -2, -3 যোগ করে।"""
+    base = slugify(value) or "item"
+    slug, n = base, 2
+    model = instance.__class__
+    while model.objects.filter(slug=slug).exclude(pk=instance.pk).exists():
+        slug = f"{base}-{n}"
+        n += 1
+    return slug
 
 
 class TimeStampedModel(models.Model):
@@ -140,3 +154,125 @@ class Project(TimeStampedModel):
 
     def __str__(self):
         return self.title
+
+
+
+
+
+class Category(TimeStampedModel):
+    name = models.CharField(max_length=80, unique=True)
+    slug = models.SlugField(max_length=100, unique=True, blank=True, editable=False)
+    description = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name_plural = "categories"
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = generate_unique_slug(self, self.name)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
+
+class Tag(TimeStampedModel):
+    name = models.CharField(max_length=50, unique=True)
+    slug = models.SlugField(max_length=70, unique=True, blank=True, editable=False)
+
+    class Meta:
+        ordering = ["name"]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = generate_unique_slug(self, self.name)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
+
+class Post(TimeStampedModel):
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Draft"
+        PUBLISHED = "PUBLISHED", "Published"
+
+    title = models.CharField(max_length=200)
+    slug = models.SlugField(max_length=220, unique=True, blank=True, editable=False)
+    excerpt = models.CharField(max_length=300)
+    content = models.TextField() 
+    cover_image = models.ImageField(upload_to="posts/", blank=True, null=True)
+    category = models.ForeignKey(
+        Category, on_delete=models.PROTECT, related_name="posts", null=True, blank=True
+    )
+    tags = models.ManyToManyField(Tag, related_name="posts", blank=True)
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="posts"
+    )
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
+    published_at = models.DateTimeField(null=True, blank=True)
+    views_count = models.PositiveIntegerField(default=0)
+    reading_time = models.PositiveIntegerField(default=1, editable=False)
+    is_featured = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-published_at"]
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = generate_unique_slug(self, self.title)
+        # প্রথমবার PUBLISHED হলে একবারই তারিখ বসবে, পরে আর বদলাবে না
+        if self.status == self.Status.PUBLISHED and self.published_at is None:
+            self.published_at = timezone.now()
+        # ~200 words/minute, হাতে লিখতে হবে না
+        self.reading_time = max(1, math.ceil(len(self.content.split()) / 200))
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.title
+
+
+class PostLike(models.Model):
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="likes")
+    visitor_id = models.CharField(max_length=64)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("post", "visitor_id")  
+
+    def __str__(self):
+        return f"{self.visitor_id} likes {self.post_id}"
+
+
+class Comment(TimeStampedModel):
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="comments")
+    name = models.CharField(max_length=80)
+    email = models.EmailField() 
+    website = models.URLField(blank=True)
+    content = models.TextField()
+    parent = models.ForeignKey(
+        "self", on_delete=models.CASCADE, related_name="replies", null=True, blank=True
+    )
+    is_approved = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} on {self.post_id}"
+
+
+class ContactMessage(TimeStampedModel):
+    name = models.CharField(max_length=100)
+    email = models.EmailField()
+    subject = models.CharField(max_length=200)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.subject} - {self.name}"
