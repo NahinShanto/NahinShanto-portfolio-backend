@@ -1,12 +1,22 @@
-from rest_framework import status
+from rest_framework import filters, status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
-from .permissions import IsOwner
-from .serializers import ChangePasswordSerializer, LoginSerializer, UserSerializer
+from django_filters.rest_framework import DjangoFilterBackend
 
+from .models import Education, Experience, Profile, Skill
+from .permissions import IsOwner, IsOwnerOrReadOnly
+from .serializers import (
+    ChangePasswordSerializer,
+    EducationSerializer,
+    ExperienceSerializer,
+    LoginSerializer,
+    ProfileSerializer,
+    SkillSerializer,
+    UserSerializer,
+)
 # Create your views here.
 
 class LoginView(TokenObtainPairView):
@@ -43,3 +53,49 @@ class ChangePasswordView(APIView):
         request.user.set_password(serializer.validated_data["new_password"])
         request.user.save()
         return Response({"detail": "Password changed successfully."})
+
+
+# =============================================================
+class ProfileView(APIView):
+    """Singleton: GET সবার জন্য, PATCH শুধু owner।"""
+    permission_classes = [IsOwnerOrReadOnly]
+
+    def get(self, request):
+        profile = Profile.get_solo()
+        if profile is None:
+            return Response({"detail": "Profile has not been set up yet."}, status=status.HTTP_404_NOT_FOUND)
+        return Response(ProfileSerializer(profile, context={"request": request}).data)
+
+    def patch(self, request):
+        profile = Profile.get_solo()
+        if profile is None:
+            serializer = ProfileSerializer(data=request.data, context={"request": request})
+        else:
+            serializer = ProfileSerializer(
+                profile, data=request.data, partial=True, context={"request": request}
+            )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class SkillViewSet(viewsets.ModelViewSet):
+    queryset = Skill.objects.all()
+    serializer_class = SkillSerializer
+    permission_classes = [IsOwnerOrReadOnly]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ["category", "is_featured"]
+    search_fields = ["name"]
+    ordering_fields = ["display_order", "proficiency"]
+
+
+class ExperienceViewSet(viewsets.ModelViewSet):
+    queryset = Experience.objects.all()
+    serializer_class = ExperienceSerializer
+    permission_classes = [IsOwnerOrReadOnly]
+
+
+class EducationViewSet(viewsets.ModelViewSet):
+    queryset = Education.objects.all()
+    serializer_class = EducationSerializer
+    permission_classes = [IsOwnerOrReadOnly]
