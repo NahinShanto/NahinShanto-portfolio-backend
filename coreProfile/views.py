@@ -6,16 +6,15 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .models import Education, Experience, Profile, Skill
+
 from .permissions import IsOwner, IsOwnerOrReadOnly
+from .filters import ProjectFilter
+from .models import Education, Experience, Profile, Project, Skill
+from .pagination import ProjectPagination
 from .serializers import (
-    ChangePasswordSerializer,
-    EducationSerializer,
-    ExperienceSerializer,
-    LoginSerializer,
-    ProfileSerializer,
-    SkillSerializer,
-    UserSerializer,
+    ChangePasswordSerializer, EducationSerializer, ExperienceSerializer,
+    LoginSerializer, ProfileSerializer, ProjectSerializer,
+    SkillSerializer, UserSerializer,
 )
 # Create your views here.
 
@@ -99,3 +98,16 @@ class EducationViewSet(viewsets.ModelViewSet):
     queryset = Education.objects.all()
     serializer_class = EducationSerializer
     permission_classes = [IsOwnerOrReadOnly]
+
+
+# ----------------------------------
+class ProjectViewSet(viewsets.ModelViewSet):
+    queryset = Project.objects.prefetch_related("tech_stack")
+    serializer_class = ProjectSerializer
+    permission_classes = [IsOwnerOrReadOnly]
+    lookup_field = "slug"  
+    pagination_class = ProjectPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_class = ProjectFilter
+    search_fields = ["title", "summary", "description"]
+    ordering_fields = ["completed_date", "display_order"]

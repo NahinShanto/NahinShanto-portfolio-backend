@@ -9,7 +9,7 @@ router = DefaultRouter()
 router.register("skills", views.SkillViewSet, basename="skill")
 router.register("experiences", views.ExperienceViewSet, basename="experience")
 router.register("education", views.EducationViewSet, basename="education")
-
+router.register("projects", views.ProjectViewSet, basename="project")
 
 
 urlpatterns = [
