@@ -4,7 +4,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from datetime import date
-from .models import Education, Experience, Profile, Project, Skill
+from .models import Category, Education, Experience, Post, Profile, Project, Skill, Tag
 from .validators import validate_image, validate_pdf
 
 
@@ -154,3 +154,150 @@ class ProjectSerializer(serializers.ModelSerializer):
             msg = "Provide at least one of live URL or GitHub URL."
             raise serializers.ValidationError({"live_url": msg, "github_url": msg})
         return attrs
+
+# ===============================================
+class CategoryMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = ("id", "name", "slug")
+
+
+class TagMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tag
+        fields = ("id", "name", "slug")
+
+
+class CategorySerializer(serializers.ModelSerializer):
+    posts_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Category
+        fields = ("id", "name", "slug", "description", "posts_count")
+        read_only_fields = ("slug",)
+
+    def get_posts_count(self, obj):
+        # শুধু PUBLISHED post গোনা হয়
+        count = getattr(obj, "published_count", None)
+        if count is None:
+            count = obj.posts.filter(status=Post.Status.PUBLISHED).count()
+        return count
+
+
+class TagSerializer(serializers.ModelSerializer):
+    posts_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Tag
+        fields = ("id", "name", "slug", "posts_count")
+        read_only_fields = ("slug",)
+
+    def get_posts_count(self, obj):
+        count = getattr(obj, "published_count", None)
+        if count is None:
+            count = obj.posts.filter(status=Post.Status.PUBLISHED).count()
+        return count
+
+
+class PostListSerializer(serializers.ModelSerializer):
+    category = CategoryMiniSerializer(read_only=True)
+    tags = TagMiniSerializer(many=True, read_only=True)
+    likes_count = serializers.SerializerMethodField()
+    comments_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Post
+        fields = (
+            "id", "title", "slug", "excerpt", "cover_image", "category", "tags",
+            "status", "published_at", "views_count", "reading_time", "is_featured",
+            "likes_count", "comments_count", "created_at",
+        )
+
+    def get_likes_count(self, obj):
+        # queryset-এ annotate করা থাকলে সেটাই নেয়, না থাকলে (create/update-এর পর) গুনে নেয়
+        value = getattr(obj, "likes_count", None)
+        return value if value is not None else obj.likes.count()
+
+    def get_comments_count(self, obj):
+        value = getattr(obj, "comments_count", None)
+        if value is None:
+            value = obj.comments.filter(is_approved=True).count()
+        return value
+
+
+class PostDetailSerializer(PostListSerializer):
+    author = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
+    related_posts = serializers.SerializerMethodField()
+
+    class Meta(PostListSerializer.Meta):
+        fields = PostListSerializer.Meta.fields + (
+            "content", "updated_at", "author", "is_liked", "related_posts",
+        )
+
+    def get_author(self, obj):
+        return obj.author.get_full_name() or obj.author.username
+
+    def get_is_liked(self, obj):
+        request = self.context.get("request")
+        visitor_id = request.headers.get("X-Visitor-Id") if request else None
+        if not visitor_id:
+            return False
+        return obj.likes.filter(visitor_id=visitor_id).exists()
+
+    def get_related_posts(self, obj):
+        if not obj.category_id:
+            return []
+        related = (
+            Post.objects.filter(status=Post.Status.PUBLISHED, category_id=obj.category_id)
+            .exclude(pk=obj.pk)
+            .select_related("category")
+            .prefetch_related("tags")[:3]
+        )
+        return PostListSerializer(related, many=True, context=self.context).data
+
+
+class PostWriteSerializer(serializers.ModelSerializer):
+    category_id = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(), source="category", required=False, allow_null=True
+    )
+    tag_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Tag.objects.all(), many=True, source="tags", required=False
+    )
+
+    class Meta:
+        model = Post
+        fields = (
+            "title", "excerpt", "content", "cover_image",
+            "category_id", "tag_ids", "status", "is_featured",
+        )
+
+    def validate_title(self, value):
+        value = value.strip()
+        if len(value) < 5:
+            raise serializers.ValidationError("Title must be at least 5 characters long.")
+        return value
+
+    def validate_cover_image(self, value):
+        return validate_image(value) if value else value
+
+    def validate(self, attrs):
+        def get(field):
+            if field in attrs:
+                return attrs[field]
+            return getattr(self.instance, field, None)
+
+        status = get("status") or Post.Status.DRAFT
+        if status == Post.Status.PUBLISHED:
+            errors = {}
+            if len((get("content") or "").strip()) < 100:
+                errors["content"] = "A published post must have at least 100 characters of content."
+            if not get("category"):
+                errors["category_id"] = "A published post must have a category."
+            if errors:
+                raise serializers.ValidationError(errors)
+        return attrs
+
+    def to_representation(self, instance):
+        # লেখার পর response-এ পুরো detail ফেরত যায়
+        return PostDetailSerializer(instance, context=self.context).data

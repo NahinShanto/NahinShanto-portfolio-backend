@@ -1,6 +1,6 @@
 import django_filters
 
-from .models import Project
+from .models import Post, Project
 
 
 class ProjectFilter(django_filters.FilterSet):
@@ -14,3 +14,12 @@ class ProjectFilter(django_filters.FilterSet):
         if value.isdigit():
             return queryset.filter(tech_stack__id=value)
         return queryset.filter(tech_stack__name__iexact=value)
+
+
+class PostFilter(django_filters.FilterSet):
+    category = django_filters.CharFilter(field_name="category__slug")  # ?category=<slug>
+    tag = django_filters.CharFilter(field_name="tags__slug")           # ?tag=<slug>
+
+    class Meta:
+        model = Post
+        fields = ["is_featured"]
