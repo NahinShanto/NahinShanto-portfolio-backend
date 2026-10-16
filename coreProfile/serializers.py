@@ -4,7 +4,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from datetime import date
-from .models import Education, Experience, Profile, Skill
+from .models import Education, Experience, Profile, Project, Skill
 from .validators import validate_image, validate_pdf
 
 
@@ -114,4 +114,43 @@ class EducationSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"end_year": "End year cannot be before start year."}
             )
+        return attrs
+
+# -------------------------------------------
+
+class SkillMiniSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Skill
+        fields = ("id", "name", "category")
+
+
+class ProjectSerializer(serializers.ModelSerializer):
+    tech_stack = SkillMiniSerializer(many=True, read_only=True)
+    tech_stack_ids = serializers.PrimaryKeyRelatedField(
+        queryset=Skill.objects.all(),
+        many=True,
+        write_only=True,
+        source="tech_stack",
+        required=False,
+    )
+
+    class Meta:
+        model = Project
+        fields = (
+            "id", "title", "slug", "summary", "description", "cover_image",
+            "tech_stack", "tech_stack_ids", "category", "live_url", "github_url",
+            "is_featured", "completed_date", "display_order",
+            "created_at", "updated_at",
+        )
+        read_only_fields = ("slug",)
+
+    def validate_cover_image(self, value):
+        return validate_image(value) if value else value
+
+    def validate(self, attrs):
+        live = attrs.get("live_url", getattr(self.instance, "live_url", ""))
+        github = attrs.get("github_url", getattr(self.instance, "github_url", ""))
+        if not live and not github:
+            msg = "Provide at least one of live URL or GitHub URL."
+            raise serializers.ValidationError({"live_url": msg, "github_url": msg})
         return attrs
