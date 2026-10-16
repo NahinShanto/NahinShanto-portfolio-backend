@@ -1,6 +1,6 @@
 import django_filters
 
-from .models import Post, Project
+from .models import Comment, Post, Project
 
 
 class ProjectFilter(django_filters.FilterSet):
@@ -23,3 +23,11 @@ class PostFilter(django_filters.FilterSet):
     class Meta:
         model = Post
         fields = ["is_featured"]
+
+# ====
+class CommentFilter(django_filters.FilterSet):
+    post = django_filters.CharFilter(field_name="post__slug")  # ?post=<slug>
+
+    class Meta:
+        model = Comment
+        fields = ["is_approved"]  # ?is_approved=false

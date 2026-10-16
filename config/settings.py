@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/6.1/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
-
+from corsheaders.defaults import default_headers
 from pathlib import Path
 from decouple import config, Csv
 from datetime import timedelta
@@ -89,6 +89,12 @@ DATABASES = {
 }
 
 CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", cast=Csv())
+# Browser-এ custom header (X-Visitor-Id) পাঠাতে হলে CORS-এ অনুমতি দিতে হয়, নইলে React থেকে request আটকে যাবে
+CORS_ALLOW_HEADERS = list(default_headers) + ["x-visitor-id"]
+
+# একই visitor একই post-এ এতক্ষণের মধ্যে আবার এলে view গোনা হবে না
+POST_VIEW_COOLDOWN_SECONDS = 60 * 30
+
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"

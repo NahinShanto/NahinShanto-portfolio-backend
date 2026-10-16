@@ -4,7 +4,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from datetime import date
-from .models import Category, Education, Experience, Post, Profile, Project, Skill, Tag
+from .models import Category, Comment, Education, Experience, Post, Profile, Project, Skill, Tag
 from .validators import validate_image, validate_pdf
 
 
@@ -301,3 +301,62 @@ class PostWriteSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         # লেখার পর response-এ পুরো detail ফেরত যায়
         return PostDetailSerializer(instance, context=self.context).data
+
+
+# =======================
+class ReplySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Comment
+        fields = ("id", "name", "website", "content", "created_at")  # email কখনো নয় (S-8)
+
+
+class PublicCommentSerializer(serializers.ModelSerializer):
+    replies = ReplySerializer(source="approved_replies", many=True, read_only=True)
+
+    class Meta:
+        model = Comment
+        fields = ("id", "name", "website", "content", "created_at", "replies")
+
+
+class CommentCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Comment
+        fields = ("name", "email", "website", "content", "parent")
+
+    def validate_name(self, value):
+        value = value.strip()
+        if len(value) < 2:
+            raise serializers.ValidationError("Name must be at least 2 characters long.")
+        return value
+
+    def validate_content(self, value):
+        value = value.strip()
+        if not 5 <= len(value) <= 1000:
+            raise serializers.ValidationError("Comment must be between 5 and 1000 characters.")
+        return value
+
+    def validate(self, attrs):
+        parent = attrs.get("parent")
+        if parent:
+            post = self.context["post"]
+            if parent.post_id != post.id:
+                raise serializers.ValidationError({"parent": "Parent comment does not belong to this post."})
+            if parent.parent_id is not None:
+                raise serializers.ValidationError({"parent": "Replies to replies are not allowed."})
+            if not parent.is_approved:
+                raise serializers.ValidationError({"parent": "You can only reply to a published comment."})
+        return attrs
+
+
+class CommentAdminSerializer(serializers.ModelSerializer):
+    post_slug = serializers.CharField(source="post.slug", read_only=True)
+    post_title = serializers.CharField(source="post.title", read_only=True)
+
+    class Meta:
+        model = Comment
+        fields = (
+            "id", "post_slug", "post_title", "name", "email", "website",
+            "content", "parent", "is_approved", "created_at",
+        )
+        # owner শুধু is_approved বদলাতে পারবে
+        read_only_fields = ("name", "email", "website", "content", "parent", "created_at")

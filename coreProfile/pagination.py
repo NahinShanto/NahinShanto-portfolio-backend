@@ -6,3 +6,6 @@ class ProjectPagination(PageNumberPagination):
 
 class PostPagination(PageNumberPagination):
     page_size = 6
+
+class CommentPagination(PageNumberPagination):
+    page_size = 10
