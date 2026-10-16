@@ -10,7 +10,9 @@ router.register("skills", views.SkillViewSet, basename="skill")
 router.register("experiences", views.ExperienceViewSet, basename="experience")
 router.register("education", views.EducationViewSet, basename="education")
 router.register("projects", views.ProjectViewSet, basename="project")
-
+router.register("categories", views.CategoryViewSet, basename="category")
+router.register("tags", views.TagViewSet, basename="tag")
+router.register("posts", views.PostViewSet, basename="post")
 
 urlpatterns = [
     path("auth/login/", views.LoginView.as_view(), name="auth-login"),
