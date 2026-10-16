@@ -1,5 +1,11 @@
-from django.db.models import Count, ProtectedError, Q
-from rest_framework import filters, status, viewsets
+import hashlib
+
+from django.conf import settings
+from django.core.cache import cache
+from django.db.models import Count, F, Prefetch, ProtectedError, Q
+from rest_framework import filters, mixins, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
@@ -7,16 +13,22 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 from django_filters.rest_framework import DjangoFilterBackend
 
-from .filters import PostFilter, ProjectFilter
-from .models import Category, Education, Experience, Post, Profile, Project, Skill, Tag
-from .pagination import PostPagination, ProjectPagination
+from .filters import CommentFilter, PostFilter, ProjectFilter
+from .models import (
+    Category, Comment, Education, Experience, Post, PostLike,
+    Profile, Project, Skill, Tag,
+)
+from .pagination import CommentPagination, PostPagination, ProjectPagination
 from .permissions import IsOwner, IsOwnerOrReadOnly, is_owner
 from .serializers import (
-    CategorySerializer, ChangePasswordSerializer, EducationSerializer,
-    ExperienceSerializer, LoginSerializer, PostDetailSerializer,
-    PostListSerializer, PostWriteSerializer, ProfileSerializer,
-    ProjectSerializer, SkillSerializer, TagSerializer, UserSerializer,
+    CategorySerializer, ChangePasswordSerializer, CommentAdminSerializer,
+    CommentCreateSerializer, EducationSerializer, ExperienceSerializer,
+    LoginSerializer, PostDetailSerializer, PostListSerializer,
+    PostWriteSerializer, ProfileSerializer, ProjectSerializer,
+    PublicCommentSerializer, SkillSerializer, TagSerializer, UserSerializer,
 )
+from .utils import get_client_ip
+
 # Create your views here.
 
 class LoginView(TokenObtainPairView):
@@ -180,3 +192,55 @@ class PostViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)  # author সবসময় owner
+
+    def _visitor_id(self, request):
+        return (request.headers.get("X-Visitor-Id") or "").strip()
+
+    def retrieve(self, request, *args, **kwargs):
+        post = self.get_object()
+        if not is_owner(request.user):  # owner নিজের post দেখলে view বাড়বে না
+            visitor = self._visitor_id(request)[:64] or get_client_ip(request) or "unknown"
+            key = f"post_view:{post.slug}:{hashlib.sha1(visitor.encode()).hexdigest()}"
+            # cache.add শুধু তখনই True দেয় যখন key আগে ছিল না: cooldown-এর মধ্যে একবারই গোনা হয়
+            if cache.add(key, 1, timeout=settings.POST_VIEW_COOLDOWN_SECONDS):
+                # F() মানে DB নিজেই "views_count + 1" করে, Python-এ পড়ে-বাড়িয়ে-লেখা নয়
+                Post.objects.filter(pk=post.pk).update(views_count=F("views_count") + 1)
+                post.views_count += 1  # এই response-এও নতুন সংখ্যা দেখাতে
+        return Response(self.get_serializer(post).data)
+
+    @action(detail=True, methods=["post"], url_path="like", permission_classes=[AllowAny])
+    def like(self, request, slug=None):
+        post = self.get_object()  # draft হলে visitor-এর জন্য 404
+        visitor_id = self._visitor_id(request)
+        if not visitor_id or len(visitor_id) > 64:
+            return Response(
+                {"detail": "A valid X-Visitor-Id header is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        like, created = PostLike.objects.get_or_create(
+            post=post, visitor_id=visitor_id, defaults={"ip_address": get_client_ip(request)}
+        )
+        if not created:
+            like.delete()  # আগেই like করা থাকলে এবার সরে যাবে (toggle)
+        return Response({"liked": created, "likes_count": post.likes.count()})
+
+    @action(detail=True, methods=["get", "post"], url_path="comments", permission_classes=[AllowAny])
+    def comments(self, request, slug=None):
+        post = self.get_object()
+        if request.method == "POST":
+            serializer = CommentCreateSerializer(data=request.data, context={"post": post})
+            serializer.is_valid(raise_exception=True)
+            serializer.save(post=post)  # is_approved ডিফল্টে False
+            return Response(
+                {"message": "Your comment is awaiting approval."},
+                status=status.HTTP_201_CREATED,
+            )
+        approved_replies = Prefetch(
+            "replies",
+            queryset=Comment.objects.filter(is_approved=True).order_by("created_at"),
+            to_attr="approved_replies",
+        )
+        qs = post.comments.filter(is_approved=True, parent__isnull=True).prefetch_related(approved_replies)
+        paginator = CommentPagination()
+        page = paginator.paginate_queryset(qs, request, view=self)
+        return paginator.get_paginated_response(PublicCommentSerializer(page, many=True).data)
