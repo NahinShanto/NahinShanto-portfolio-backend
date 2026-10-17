@@ -4,7 +4,7 @@ from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from datetime import date
-from .models import Category, Comment, Education, Experience, Post, Profile, Project, Skill, Tag
+from .models import Category, Comment, Education, Experience, Post, Profile, Project, Skill, Tag,ContactMessage
 from .validators import validate_image, validate_pdf
 
 
@@ -360,3 +360,27 @@ class CommentAdminSerializer(serializers.ModelSerializer):
         )
         # owner শুধু is_approved বদলাতে পারবে
         read_only_fields = ("name", "email", "website", "content", "parent", "created_at")
+
+class ContactCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactMessage
+        fields = ("name", "email", "subject", "message")
+
+    def validate_name(self, value):
+        value = value.strip()
+        if len(value) < 2:
+            raise serializers.ValidationError("Name must be at least 2 characters long.")
+        return value
+
+    def validate_message(self, value):
+        value = value.strip()
+        if not 10 <= len(value) <= 2000:
+            raise serializers.ValidationError("Message must be between 10 and 2000 characters.")
+        return value
+
+
+class ContactAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactMessage
+        fields = ("id", "name", "email", "subject", "message", "is_read", "created_at")
+        read_only_fields = ("name", "email", "subject", "message", "created_at")  # owner শুধু is_read বদলাবে

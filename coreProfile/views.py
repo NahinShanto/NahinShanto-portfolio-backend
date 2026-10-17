@@ -1,8 +1,12 @@
 import hashlib
+from datetime import datetime
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db.models import Count, F, Prefetch, ProtectedError, Q
+from django.db.models import Count, F, Prefetch, ProtectedError, Q, Sum
+from django.db.models.functions import Coalesce, TruncMonth
+from django.utils import timezone
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters, mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny
@@ -11,21 +15,21 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
-from django_filters.rest_framework import DjangoFilterBackend
 
-from .filters import CommentFilter, PostFilter, ProjectFilter
+from .filters import CommentFilter, ContactFilter, PostFilter, ProjectFilter
 from .models import (
-    Category, Comment, Education, Experience, Post, PostLike,
-    Profile, Project, Skill, Tag,
+    Category, Comment, ContactMessage, Education, Experience, Post,
+    PostLike, Profile, Project, Skill, Tag,
 )
-from .pagination import CommentPagination, PostPagination, ProjectPagination
+from .pagination import CommentPagination, ContactPagination, PostPagination, ProjectPagination
 from .permissions import IsOwner, IsOwnerOrReadOnly, is_owner
 from .serializers import (
     CategorySerializer, ChangePasswordSerializer, CommentAdminSerializer,
-    CommentCreateSerializer, EducationSerializer, ExperienceSerializer,
-    LoginSerializer, PostDetailSerializer, PostListSerializer,
-    PostWriteSerializer, ProfileSerializer, ProjectSerializer,
-    PublicCommentSerializer, SkillSerializer, TagSerializer, UserSerializer,
+    CommentCreateSerializer, ContactAdminSerializer, ContactCreateSerializer,
+    EducationSerializer, ExperienceSerializer, LoginSerializer,
+    PostDetailSerializer, PostListSerializer, PostWriteSerializer,
+    ProfileSerializer, ProjectSerializer, PublicCommentSerializer,
+    SkillSerializer, TagSerializer, UserSerializer,
 )
 from .utils import get_client_ip
 
@@ -193,6 +197,15 @@ class PostViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)  # author সবসময় owner
 
+    def get_throttles(self):
+        if self.action == "like":
+            self.throttle_scope = "like"
+        elif self.action == "comments" and self.request.method == "POST":
+            self.throttle_scope = "comment"  # শুধু comment পাঠানোয় limit, পড়ায় নয়
+        else:
+            self.throttle_scope = None
+        return super().get_throttles()
+    
     def _visitor_id(self, request):
         return (request.headers.get("X-Visitor-Id") or "").strip()
 
@@ -244,3 +257,102 @@ class PostViewSet(viewsets.ModelViewSet):
         paginator = CommentPagination()
         page = paginator.paginate_queryset(qs, request, view=self)
         return paginator.get_paginated_response(PublicCommentSerializer(page, many=True).data)
+
+
+# ==========
+
+class ContactViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    queryset = ContactMessage.objects.all()
+    pagination_class = ContactPagination
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = ContactFilter
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_permissions(self):
+        if self.action == "create":
+            return [AllowAny()]  # visitor পাঠাতে পারবে
+        return [IsOwner()]       # পড়া, মার্ক, মোছা শুধু owner
+
+    def get_serializer_class(self):
+        return ContactCreateSerializer if self.action == "create" else ContactAdminSerializer
+
+    def get_throttles(self):
+        self.throttle_scope = "contact" if self.action == "create" else None
+        return super().get_throttles()
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({"message": "Thank you! Your message has been sent."}, status=status.HTTP_201_CREATED)
+
+
+class DashboardStatsView(APIView):
+    permission_classes = [IsOwner]
+
+    def get(self, request):
+        published = Post.Status.PUBLISHED
+        # প্রতিটাই DB-তে একটা aggregate query, Python loop নয়
+        post_stats = Post.objects.aggregate(
+            total_posts=Count("id"),
+            published_posts=Count("id", filter=Q(status=published)),
+            draft_posts=Count("id", filter=Q(status=Post.Status.DRAFT)),
+            total_views=Coalesce(Sum("views_count"), 0),
+        )
+        comment_stats = Comment.objects.aggregate(
+            total_comments=Count("id"),
+            pending_comments=Count("id", filter=Q(is_approved=False)),
+        )
+        top_posts = (
+            Post.objects.filter(status=published)
+            .annotate(likes_total=Count("likes"))
+            .order_by("-views_count")[:5]
+        )
+        recent_comments = Comment.objects.select_related("post")[:5]
+
+        # শেষ ৬ মাস (এই মাস সহ), যে মাসে post নেই সেখানে 0
+        today = timezone.localdate()
+        months, y, m = [], today.year, today.month
+        for _ in range(6):
+            months.append((y, m))
+            m -= 1
+            if m == 0:
+                y, m = y - 1, 12
+        months.reverse()
+        since = timezone.make_aware(datetime(months[0][0], months[0][1], 1))
+        per_month = (
+            Post.objects.filter(created_at__gte=since)
+            .annotate(month=TruncMonth("created_at"))
+            .values("month")
+            .annotate(count=Count("id"))
+            .order_by("month")
+        )
+        counts = {(r["month"].year, r["month"].month): r["count"] for r in per_month}
+
+        return Response({
+            **post_stats,
+            **comment_stats,
+            "total_projects": Project.objects.count(),
+            "total_skills": Skill.objects.count(),
+            "total_likes": PostLike.objects.count(),
+            "unread_messages": ContactMessage.objects.filter(is_read=False).count(),
+            "top_posts": [
+                {"title": p.title, "slug": p.slug, "views": p.views_count, "likes": p.likes_total}
+                for p in top_posts
+            ],
+            "recent_comments": CommentAdminSerializer(recent_comments, many=True).data,
+            "posts_per_month": [
+                {
+                    "month": f"{yy}-{mm:02d}",
+                    "label": datetime(yy, mm, 1).strftime("%b %Y"),
+                    "count": counts.get((yy, mm), 0),
+                }
+                for yy, mm in months
+            ],
+        })

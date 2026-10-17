@@ -23,6 +23,8 @@ router.register("projects", views.ProjectViewSet, basename="project")
 router.register("categories", views.CategoryViewSet, basename="category")
 router.register("tags", views.TagViewSet, basename="tag")
 router.register("posts", views.PostViewSet, basename="post")
+router.register("contact", views.ContactViewSet, basename="contact")
+
 
 urlpatterns = [
     path("auth/login/", views.LoginView.as_view(), name="auth-login"),
@@ -32,4 +34,5 @@ urlpatterns = [
     path("auth/change-password/", views.ChangePasswordView.as_view(), name="auth-change-password"),
     path("profile/", views.ProfileView.as_view(), name="profile"),
     path("", include(router.urls)),
+    path("dashboard/stats/", views.DashboardStatsView.as_view(), name="dashboard-stats"),
 ]

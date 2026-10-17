@@ -9,3 +9,6 @@ class PostPagination(PageNumberPagination):
 
 class CommentPagination(PageNumberPagination):
     page_size = 10
+
+class ContactPagination(PageNumberPagination):
+    page_size = 10

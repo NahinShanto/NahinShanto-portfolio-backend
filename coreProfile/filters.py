@@ -1,6 +1,6 @@
 import django_filters
 
-from .models import Comment, Post, Project
+from .models import Comment, ContactMessage, Post, Project
 
 
 class ProjectFilter(django_filters.FilterSet):
@@ -31,3 +31,7 @@ class CommentFilter(django_filters.FilterSet):
     class Meta:
         model = Comment
         fields = ["is_approved"]  # ?is_approved=false
+class ContactFilter(django_filters.FilterSet):
+    class Meta:
+        model = ContactMessage
+        fields = ["is_read"]  # ?is_read=false
